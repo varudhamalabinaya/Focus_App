@@ -1,54 +1,76 @@
-import { initialState } from './data'
-import type { FocusState, TaskStatus } from './types'
+import type { ExtensionState, FocusSettings } from './types'
 
-export const STORAGE_KEY = 'focus-prototype-state-v3'
-const LEGACY_KEYS = ['focus-prototype-state-v2', 'focus-prototype-state-v1']
-const validTaskStatuses: TaskStatus[] = ['open', 'completed', 'waiting', 'verified', 'rejected']
+export const STORAGE_KEY = 'focus-extension-state-v1'
 
-function normalizeState(parsed: Partial<FocusState>): FocusState {
-  const base = structuredClone(initialState)
-  const goals = Array.isArray(parsed.goals) && parsed.goals.length ? parsed.goals : base.goals
-  const activeGoalId = goals.some((goal) => goal.id === parsed.activeGoalId) ? parsed.activeGoalId! : goals[0].id
-  const parsedTasks = Array.isArray(parsed.commitment?.tasks) ? parsed.commitment.tasks : base.commitment.tasks
-  const commitment = {
-    ...base.commitment,
-    ...(parsed.commitment ?? {}),
-    partnerId: parsed.commitment?.partnerId ?? base.partner.id,
-    goalIds: Array.isArray(parsed.commitment?.goalIds) ? parsed.commitment.goalIds : goals.map((goal) => goal.id),
-    tasks: parsedTasks.map((task) => ({
-      ...task,
-      goalId: task.goalId || activeGoalId,
-      status: validTaskStatuses.includes(task.status) ? task.status : 'open',
-      attempt: Math.min(5, Math.max(1, task.attempt || 1)),
-    })),
-    blockedSites: Array.isArray(parsed.commitment?.blockedSites) ? parsed.commitment.blockedSites : base.commitment.blockedSites,
+export const defaultSettings: FocusSettings = {
+  sessionName: 'Deep work session',
+  durationMinutes: 45,
+  breakIntervalMinutes: 25,
+  blockedDomains: ['youtube.com', 'instagram.com', 'reddit.com'],
+}
+
+export const defaultState: ExtensionState = {
+  settings: defaultSettings,
+  activeSession: null,
+  completedSession: null,
+  breakReminderDue: false,
+  nextBreakAt: null,
+}
+
+type ChromeStorage = {
+  runtime?: { id?: string }
+  storage?: {
+    local: { get: (key: string) => Promise<Record<string, unknown>>; set: (items: Record<string, unknown>) => Promise<void> }
+    onChanged: { addListener: (listener: (changes: Record<string, { newValue?: unknown }>, area: string) => void) => void; removeListener: (listener: (changes: Record<string, { newValue?: unknown }>, area: string) => void) => void }
   }
+}
+
+const browserChrome = (globalThis as typeof globalThis & { chrome?: ChromeStorage }).chrome
+
+export function extensionMode() {
+  return Boolean(browserChrome?.runtime?.id && browserChrome.storage)
+}
+
+function normalizeState(value: unknown): ExtensionState {
+  if (!value || typeof value !== 'object') return structuredClone(defaultState)
+  const parsed = value as Partial<ExtensionState>
   return {
-    ...base,
+    ...structuredClone(defaultState),
     ...parsed,
-    user: { ...base.user, ...(parsed.user ?? {}) },
-    partner: { ...base.partner, ...(parsed.partner ?? {}) },
-    goals,
-    activeGoalId,
-    commitment,
-    progress: { ...base.progress, ...(parsed.progress ?? {}) },
-    evidence: Array.isArray(parsed.evidence) ? parsed.evidence : base.evidence,
-    accessRequests: Array.isArray(parsed.accessRequests) ? parsed.accessRequests : base.accessRequests,
-    notifications: Array.isArray(parsed.notifications) ? parsed.notifications : base.notifications,
+    settings: { ...defaultSettings, ...(parsed.settings ?? {}) },
   }
 }
 
-export function loadFocusState(): FocusState {
+export async function loadExtensionState(): Promise<ExtensionState> {
+  if (extensionMode()) {
+    const stored = await browserChrome!.storage!.local.get(STORAGE_KEY)
+    return normalizeState(stored[STORAGE_KEY])
+  }
   try {
-    const saved = localStorage.getItem(STORAGE_KEY) ?? LEGACY_KEYS.map((key) => localStorage.getItem(key)).find(Boolean)
-    if (!saved) return structuredClone(initialState)
-    const parsed = JSON.parse(saved) as Partial<FocusState>
-    return normalizeState(parsed)
+    return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? 'null'))
   } catch {
-    return structuredClone(initialState)
+    return structuredClone(defaultState)
   }
 }
 
-export function persistFocusState(state: FocusState) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+export async function saveExtensionState(state: ExtensionState) {
+  if (extensionMode()) {
+    await browserChrome!.storage!.local.set({ [STORAGE_KEY]: state })
+  } else {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    window.dispatchEvent(new CustomEvent(STORAGE_KEY, { detail: state }))
+  }
+}
+
+export function subscribeToExtensionState(listener: (state: ExtensionState) => void) {
+  if (extensionMode()) {
+    const handleChange = (changes: Record<string, { newValue?: unknown }>, area: string) => {
+      if (area === 'local' && changes[STORAGE_KEY]) listener(normalizeState(changes[STORAGE_KEY].newValue))
+    }
+    browserChrome!.storage!.onChanged.addListener(handleChange)
+    return () => browserChrome!.storage!.onChanged.removeListener(handleChange)
+  }
+  const handleLocal = (event: Event) => listener(normalizeState((event as CustomEvent).detail))
+  window.addEventListener(STORAGE_KEY, handleLocal)
+  return () => window.removeEventListener(STORAGE_KEY, handleLocal)
 }

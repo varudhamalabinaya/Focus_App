@@ -1,51 +1,74 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ArrowLeft, ArrowRight, Check, LockKeyhole } from 'lucide-react'
-import { loadFocusState, persistFocusState } from './storage'
+import { ArrowLeft, Check, LockKeyhole } from 'lucide-react'
+import { recoverState } from './extensionApi'
+import { defaultState, loadExtensionState, subscribeToExtensionState } from './storage'
+import type { ExtensionState } from './types'
 import './focus.css'
 
-function BlockedPage() {
-  const [requesting, setRequesting] = useState(false)
-  const [sent, setSent] = useState(false)
-  const [reason, setReason] = useState('')
-  const [duration, setDuration] = useState(15)
-  const params = new URLSearchParams(location.search)
-  const site = params.get('site') || 'YouTube'
-  const [focusState] = useState(loadFocusState)
-  const progressPercent = Math.round((focusState.progress.verifiedTasks / focusState.progress.totalTasks) * 100)
+function formatClock(milliseconds: number) {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remainder = seconds % 60
+  return [hours, minutes, remainder].map((value) => String(value).padStart(2, '0')).join(':')
+}
 
-  function submit() {
-    const state = loadFocusState()
-    state.accessRequests.unshift({ id: `ar-${Date.now()}`, site, reason, duration, requestedAt: 'Just now', status: 'pending' })
-    persistFocusState(state)
-    setSent(true)
-  }
+function BlockedPage() {
+  const [state, setState] = useState<ExtensionState>(() => structuredClone(defaultState))
+  const [loading, setLoading] = useState(true)
+  const [now, setNow] = useState(Date.now())
+  const params = new URLSearchParams(location.search)
+  const site = params.get('site') || 'This website'
+
+  useEffect(() => {
+    let mounted = true
+    void recoverState().catch(() => loadExtensionState()).then((next) => {
+      if (mounted) {
+        setState(next)
+        setLoading(false)
+      }
+    })
+    const unsubscribe = subscribeToExtensionState(setState)
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => {
+      mounted = false
+      unsubscribe()
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const session = state.activeSession
+  const active = Boolean(session && session.endsAt > now)
 
   return (
     <main className="blocked-page">
       <header className="blocked-brand"><span className="brand-mark">F</span><span>Focus</span></header>
-      <section className="blocked-panel">
-        {!requesting && !sent && <>
-          <span className="intervention-icon"><LockKeyhole size={31}/></span>
-          <p className="eyebrow">Commitment Protection</p>
-          <h1>A pause before<br/>you continue.</h1>
-          <p>You chose to protect this time for deep work. <strong>{site}</strong> is blocked while your commitment is active.</p>
-          <div className="blocked-ledger"><span>{focusState.commitment.name}</span><strong>Day {focusState.commitment.day} <i/> {progressPercent}% complete</strong></div>
-          <button className="primary wide" onClick={() => setRequesting(true)}>Request temporary access <ArrowRight size={17}/></button>
-          <button className="secondary wide" onClick={() => history.back()}><ArrowLeft size={16}/> Return to focused work</button>
-        </>}
-        {requesting && !sent && <>
-          <p className="eyebrow">A deliberate exception</p>
-          <h1>Why do you<br/>need access?</h1>
-          <p>Abinaya will see only this reason, the site, and requested duration.</p>
-          <label className="blocked-field"><span>Reason</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Be specific about what you need to do."/></label>
-          <label className="blocked-field"><span>Duration</span><select value={duration} onChange={(event) => setDuration(Number(event.target.value))}><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select></label>
-          <button className="primary wide" disabled={reason.trim().length < 8} onClick={submit}>Send request to Abinaya</button>
-          <button className="secondary wide" onClick={() => setRequesting(false)}>Cancel</button>
-        </>}
-        {sent && <div className="sent-state"><span><Check size={28}/></span><p className="eyebrow">Request sent</p><h1>Wait for Abinaya’s decision.</h1><p>{site} stays blocked until the request is approved. You can return to your work now.</p><button className="primary wide" onClick={() => history.back()}>Return to focused work</button></div>}
-      </section>
-      <footer>Browser-level prototype protection · Focus cannot prevent extension removal.</footer>
+      {loading ? (
+        <section className="blocked-panel"><p className="eyebrow">Checking session</p><h1>One moment.</h1></section>
+      ) : active && session ? (
+        <section className="blocked-panel">
+          <span className="blocked-lock"><LockKeyhole size={30}/></span>
+          <p className="eyebrow">You’re in focus mode</p>
+          <h1>Stay with the work.</h1>
+          <p className="blocked-copy"><strong>{site}</strong> is blocked until your focus session ends.</p>
+          <div className="blocked-timer" aria-label={`${formatClock(session.endsAt - now)} remaining`}>
+            {formatClock(session.endsAt - now)}
+          </div>
+          <p className="blocked-remaining">remaining</p>
+          <div className="blocked-ledger"><span>Current session</span><strong>{session.sessionName}</strong></div>
+          <button className="return-button" onClick={() => history.back()}><ArrowLeft size={17}/> Return to focused work</button>
+        </section>
+      ) : (
+        <section className="blocked-panel ended-panel">
+          <span className="blocked-lock"><Check size={30}/></span>
+          <p className="eyebrow">Session ended</p>
+          <h1>This site is available again.</h1>
+          <p className="blocked-copy">Your focus session is no longer active, and Focus has removed its blocking rules.</p>
+          <button className="return-button" onClick={() => location.reload()}>Continue</button>
+        </section>
+      )}
+      <footer>Focus protects its own rules during a session. Chrome still allows the extension to be disabled or removed.</footer>
     </main>
   )
 }
