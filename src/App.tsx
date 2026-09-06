@@ -3,6 +3,7 @@ import {
   ArrowRight,
   Check,
   Clock3,
+  Coffee,
   LockKeyhole,
   Plus,
   ShieldCheck,
@@ -222,8 +223,9 @@ function SetupView() {
 }
 
 function ActiveView() {
-  const { state, acknowledge, error } = useFocus()
+  const { state, takeBreak, error } = useFocus()
   const session = state.activeSession!
+  const activeBreak = state.activeBreak
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -231,9 +233,11 @@ function ActiveView() {
     return () => window.clearInterval(timer)
   }, [])
 
-  const remaining = session.endsAt - now
+  const remaining = (activeBreak?.endsAt ?? session.endsAt) - now
   const breakMessage = state.breakReminderDue
-    ? 'Time for a short break. Step away for a few minutes.'
+    ? 'Pause focus for exactly five minutes. Your focus deadline will move once; every site stays blocked.'
+    : activeBreak
+      ? `Focus resumes automatically in ${formatClock(activeBreak.endsAt - now)}. Protected sites remain locked.`
     : !session.breakIntervalMinutes
       ? 'Break reminder off'
       : state.nextBreakAt
@@ -243,18 +247,18 @@ function ActiveView() {
   return (
     <main className="popup-shell active-view">
       <Brand/>
-      <section className="timer-panel">
-        <p className="mode-label"><span/> Focus mode</p>
+      <section className={`timer-panel ${activeBreak ? 'on-break' : ''}`}>
+        <p className="mode-label"><span/> {activeBreak ? 'Designed break' : 'Focus mode'}</p>
         <div className="timer" aria-label={`${formatClock(remaining)} remaining`}>{formatClock(remaining)}</div>
-        <p className="remaining-label">remaining</p>
+        <p className="remaining-label">{activeBreak ? 'until focus resumes' : 'remaining'}</p>
         <h1>{session.sessionName}</h1>
-        <div className="protected-line"><ShieldCheck size={18}/><strong>Focus is protected</strong></div>
+        <div className="protected-line"><ShieldCheck size={18}/><strong>{activeBreak ? 'Blocking stays protected' : 'Focus is protected'}</strong></div>
       </section>
 
-      <section className={`break-status ${state.breakReminderDue ? 'due' : ''}`}>
-        <Clock3 size={19}/>
-        <div><strong>{state.breakReminderDue ? 'Break reminder' : 'Your pace'}</strong><p>{breakMessage}</p></div>
-        {state.breakReminderDue && <button onClick={acknowledge}>Acknowledge</button>}
+      <section className={`break-status ${state.breakReminderDue ? 'due' : ''} ${activeBreak ? 'active-break' : ''}`}>
+        {activeBreak ? <Coffee size={19}/> : <Clock3 size={19}/>}
+        <div><strong>{activeBreak ? 'Five-minute break in progress' : state.breakReminderDue ? 'Break available' : 'Your pace'}</strong><p>{breakMessage}</p></div>
+        {state.breakReminderDue && <button onClick={takeBreak}>Start 5-minute break</button>}
       </section>
       {error && <p className="form-error" role="alert">{error}</p>}
 
@@ -273,7 +277,7 @@ function ActiveView() {
       <AccountabilityCard/>
       <aside className="truth-note">
         <ShieldCheck size={17}/>
-        <p>Focus locks its own controls and blocking rules during this session. Chrome still allows you to disable or uninstall the extension.</p>
+        <p>Focus has no pause, stop, or editing controls during a session. Chrome still allows disabling or removal; while disabled, blocking cannot work, but elapsed wall time still counts and never becomes extra focus time.</p>
       </aside>
       <p className="incognito-note">Incognito blocking works only after you enable “Allow in Incognito” in Chrome. Focus cannot enable that permission for you.</p>
     </main>

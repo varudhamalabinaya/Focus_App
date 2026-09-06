@@ -1,4 +1,5 @@
 import { defaultState, extensionMode, loadExtensionState, saveExtensionState } from './storage'
+import { nextBreakTime, reconcileLifecycle, startFixedBreak } from './lifecycle'
 import type { BackgroundMessage, BackgroundResponse, ExtensionState, FocusSettings } from './types'
 
 type RuntimeChrome = { runtime?: { sendMessage: (message: BackgroundMessage) => Promise<BackgroundResponse> } }
@@ -20,19 +21,14 @@ async function send(message: BackgroundMessage): Promise<ExtensionState> {
       startedAt,
       endsAt: startedAt + message.settings.durationMinutes * 60_000,
     }
-    const proposedBreak = message.settings.breakIntervalMinutes
-      ? startedAt + message.settings.breakIntervalMinutes * 60_000
-      : null
-    const nextBreakAt = proposedBreak && proposedBreak < activeSession.endsAt ? proposedBreak : null
-    const next = { ...defaultState, settings: message.settings, activeSession, nextBreakAt }
+    let next: ExtensionState = { ...structuredClone(defaultState), settings: message.settings, activeSession }
+    next = { ...next, nextBreakAt: nextBreakTime(next, startedAt) }
     await saveExtensionState(next)
     return next
   }
-  if (message.type === 'ACKNOWLEDGE_BREAK' && current.activeSession) {
-    const interval = current.activeSession.breakIntervalMinutes
-    const proposedBreak = interval ? Date.now() + interval * 60_000 : null
-    const nextBreakAt = proposedBreak && proposedBreak < current.activeSession.endsAt ? proposedBreak : null
-    const next = { ...current, breakReminderDue: false, nextBreakAt }
+  if (message.type === 'START_BREAK') {
+    const now = Date.now()
+    const next = startFixedBreak(reconcileLifecycle(current, now).state, now)
     await saveExtensionState(next)
     return next
   }
@@ -41,15 +37,21 @@ async function send(message: BackgroundMessage): Promise<ExtensionState> {
     await saveExtensionState(next)
     return next
   }
-  return current
+  const next = reconcileLifecycle(current, Date.now()).state
+  await saveExtensionState(next)
+  return next
 }
 
 export function startSession(settings: FocusSettings) {
   return send({ type: 'START_SESSION', settings })
 }
 
-export function acknowledgeBreak() {
-  return send({ type: 'ACKNOWLEDGE_BREAK' })
+export function startBreak() {
+  return send({ type: 'START_BREAK' })
+}
+
+export function endBreak() {
+  return send({ type: 'END_BREAK' })
 }
 
 export function resetCompletion() {
@@ -57,5 +59,9 @@ export function resetCompletion() {
 }
 
 export function recoverState() {
-  return send({ type: 'RECOVER_STATE' })
+  if (!extensionMode()) return send({ type: 'RECOVER_STATE' })
+  const storedStateFallback = new Promise<ExtensionState>((resolve) => {
+    setTimeout(() => { void loadExtensionState().then(resolve) }, 1500)
+  })
+  return Promise.race([send({ type: 'RECOVER_STATE' }), storedStateFallback])
 }

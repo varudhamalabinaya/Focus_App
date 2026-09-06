@@ -1,5 +1,6 @@
-import { normalizeDomain } from './domains'
-import { defaultState, STORAGE_KEY } from './storage'
+import { matchBlockedDomain, normalizeDomain } from './domains'
+import { nextBreakTime, reconcileLifecycle, startFixedBreak } from './lifecycle'
+import { defaultState, normalizeState, STORAGE_KEY } from './storage'
 import type { BackgroundMessage, BackgroundResponse, ExtensionState, FocusSession, FocusSettings } from './types'
 
 interface Rule {
@@ -11,12 +12,20 @@ interface Rule {
 
 declare const chrome: {
   runtime: {
+    id: string
     getURL: (path: string) => string
     onInstalled: { addListener: (callback: () => void) => void }
     onStartup: { addListener: (callback: () => void) => void }
     onMessage: { addListener: (callback: (message: BackgroundMessage, sender: unknown, respond: (response: BackgroundResponse) => void) => boolean) => void }
   }
+  management: {
+    onEnabled: { addListener: (callback: (extensionInfo: { id: string }) => void) => void }
+  }
   storage: { local: { get: (key: string) => Promise<Record<string, unknown>>; set: (items: Record<string, unknown>) => Promise<void> } }
+  tabs: {
+    query: (queryInfo: Record<string, never>) => Promise<Array<{ id?: number; url?: string }>>
+    update: (tabId: number, updateProperties: { url: string }) => Promise<unknown>
+  }
   declarativeNetRequest: {
     getDynamicRules: () => Promise<Rule[]>
     updateDynamicRules: (update: { removeRuleIds: number[]; addRules?: Rule[] }) => Promise<void>
@@ -40,7 +49,8 @@ declare const chrome: {
 const RULE_BASE = 42000
 const RULE_LIMIT = 43000
 const END_ALARM = 'focus:end'
-const BREAK_ALARM = 'focus:break'
+const BREAK_REMINDER_ALARM = 'focus:break-reminder'
+const BREAK_END_ALARM = 'focus:break-end'
 const LEGACY_RULE_IDS = [101, 102, 103]
 let queue = Promise.resolve()
 
@@ -52,7 +62,7 @@ function enqueue<T>(task: () => Promise<T>) {
 
 async function readState(): Promise<ExtensionState> {
   const stored = await chrome.storage.local.get(STORAGE_KEY)
-  return { ...structuredClone(defaultState), ...((stored[STORAGE_KEY] as Partial<ExtensionState> | undefined) ?? {}) }
+  return normalizeState(stored[STORAGE_KEY])
 }
 
 async function writeState(state: ExtensionState) {
@@ -91,73 +101,55 @@ async function applyRules(session: FocusSession) {
   await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [], addRules })
 }
 
+async function redirectOpenBlockedTabs(session: FocusSession) {
+  const tabs = await chrome.tabs.query({})
+  tabs.forEach((tab) => {
+    if (typeof tab.id !== 'number' || !tab.url) return
+    const domain = matchBlockedDomain(tab.url, session.blockedDomains)
+    if (!domain) return
+    void chrome.tabs.update(tab.id, {
+      url: chrome.runtime.getURL(`blocked.html?site=${encodeURIComponent(domain)}`),
+    }).catch(() => undefined)
+  })
+}
+
 async function clearAlarms() {
-  await Promise.all([chrome.alarms.clear(END_ALARM), chrome.alarms.clear(BREAK_ALARM)])
+  await Promise.all([
+    chrome.alarms.clear(END_ALARM),
+    chrome.alarms.clear(BREAK_REMINDER_ALARM),
+    chrome.alarms.clear(BREAK_END_ALARM),
+  ])
 }
 
 async function notifyBreak() {
   await chrome.notifications.create('focus-break-reminder', {
     type: 'basic',
     iconUrl: chrome.runtime.getURL('icon-128.png'),
-    title: 'Time for a short break',
-    message: 'Step away for a few minutes.',
+    title: 'Your five-minute break is ready',
+    message: 'Open Focus to start it. Protected sites stay blocked.',
     priority: 1,
   })
 }
 
-function scheduleBreak(session: FocusSession, state: ExtensionState, from = Date.now()) {
-  if (!session.breakIntervalMinutes) return { ...state, nextBreakAt: null }
-  const nextBreakAt = from + session.breakIntervalMinutes * 60_000
-  if (nextBreakAt >= session.endsAt) return { ...state, nextBreakAt: null }
-  chrome.alarms.create(BREAK_ALARM, { when: nextBreakAt })
-  return { ...state, nextBreakAt }
-}
-
-async function completeSession(state: ExtensionState) {
-  await removeFocusRules()
-  await clearAlarms()
-  if (!state.activeSession) return { ...state, breakReminderDue: false, nextBreakAt: null }
-  const session = state.activeSession
-  const next: ExtensionState = {
-    ...state,
-    activeSession: null,
-    breakReminderDue: false,
-    nextBreakAt: null,
-    completedSession: {
-      id: session.id,
-      sessionName: session.sessionName,
-      durationMinutes: session.durationMinutes,
-      startedAt: session.startedAt,
-      completedAt: session.endsAt,
-    },
-  }
-  await writeState(next)
-  return next
-}
-
 async function recover() {
-  let state = await readState()
+  const previous = await readState()
+  const result = reconcileLifecycle(previous, Date.now())
+  const state = result.state
+  await clearAlarms()
+
   if (!state.activeSession) {
     await removeFocusRules()
-    await clearAlarms()
+    await writeState(state)
     return state
   }
-  if (state.activeSession.endsAt <= Date.now()) return completeSession(state)
+
   await applyRules(state.activeSession)
-  await clearAlarms()
+  await redirectOpenBlockedTabs(state.activeSession)
   chrome.alarms.create(END_ALARM, { when: state.activeSession.endsAt })
-  if (!state.breakReminderDue) {
-    if (state.nextBreakAt && state.nextBreakAt <= Date.now()) {
-      state = { ...state, breakReminderDue: true, nextBreakAt: null }
-      await writeState(state)
-      await notifyBreak()
-    } else if (state.nextBreakAt && state.nextBreakAt < state.activeSession.endsAt) {
-      chrome.alarms.create(BREAK_ALARM, { when: state.nextBreakAt })
-    } else {
-      state = scheduleBreak(state.activeSession, state)
-      await writeState(state)
-    }
-  }
+  if (state.activeBreak) chrome.alarms.create(BREAK_END_ALARM, { when: state.activeBreak.endsAt })
+  else if (state.nextBreakAt) chrome.alarms.create(BREAK_REMINDER_ALARM, { when: state.nextBreakAt })
+  await writeState(state)
+  if (result.breakBecameDue) await notifyBreak()
   return state
 }
 
@@ -168,18 +160,19 @@ async function handleMessage(message: BackgroundMessage): Promise<ExtensionState
     const settings = validateSettings(message.settings)
     const startedAt = Date.now()
     const session: FocusSession = { ...settings, id: crypto.randomUUID(), startedAt, endsAt: startedAt + settings.durationMinutes * 60_000 }
-    let next: ExtensionState = { ...defaultState, settings, activeSession: session }
-    next = scheduleBreak(session, next, startedAt)
-    await applyRules(session)
-    chrome.alarms.create(END_ALARM, { when: session.endsAt })
+    let next: ExtensionState = { ...structuredClone(defaultState), settings, activeSession: session }
+    next = { ...next, nextBreakAt: nextBreakTime(next, startedAt) }
     await writeState(next)
-    return next
+    return recover()
   }
-  if (message.type === 'ACKNOWLEDGE_BREAK' && current.activeSession) {
-    await chrome.alarms.clear(BREAK_ALARM)
-    const next = scheduleBreak(current.activeSession, { ...current, breakReminderDue: false, nextBreakAt: null })
+  if (message.type === 'START_BREAK') {
+    const reconciled = await recover()
+    const next = startFixedBreak(reconciled, Date.now())
     await writeState(next)
-    return next
+    return recover()
+  }
+  if (message.type === 'END_BREAK') {
+    return recover()
   }
   if (message.type === 'RESET_COMPLETION') {
     const next = { ...current, completedSession: null }
@@ -191,6 +184,9 @@ async function handleMessage(message: BackgroundMessage): Promise<ExtensionState
 
 chrome.runtime.onInstalled.addListener(() => { void enqueue(recover) })
 chrome.runtime.onStartup.addListener(() => { void enqueue(recover) })
+chrome.management.onEnabled.addListener((extensionInfo) => {
+  if (extensionInfo.id === chrome.runtime.id) void enqueue(recover)
+})
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   void enqueue(() => handleMessage(message))
     .then((state) => respond({ ok: true, state }))
@@ -198,14 +194,7 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   return true
 })
 chrome.alarms.onAlarm.addListener((alarm) => {
-  void enqueue(async () => {
-    const state = await readState()
-    if (alarm.name === END_ALARM) await completeSession(state)
-    if (alarm.name === BREAK_ALARM && state.activeSession && state.activeSession.endsAt > Date.now()) {
-      await writeState({ ...state, breakReminderDue: true, nextBreakAt: null })
-      await notifyBreak()
-    }
-  })
+  if ([END_ALARM, BREAK_REMINDER_ALARM, BREAK_END_ALARM].includes(alarm.name)) void enqueue(recover)
 })
 
 void enqueue(recover)

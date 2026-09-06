@@ -1,4 +1,5 @@
-import type { ExtensionState, FocusSettings } from './types'
+import { BREAK_DURATION_MS } from './lifecycle'
+import type { ExtensionState, FocusBreak, FocusSession, FocusSettings } from './types'
 
 export const STORAGE_KEY = 'focus-extension-state-v1'
 
@@ -12,6 +13,7 @@ export const defaultSettings: FocusSettings = {
 export const defaultState: ExtensionState = {
   settings: defaultSettings,
   activeSession: null,
+  activeBreak: null,
   completedSession: null,
   breakReminderDue: false,
   nextBreakAt: null,
@@ -31,13 +33,51 @@ export function extensionMode() {
   return Boolean(browserChrome?.runtime?.id && browserChrome.storage)
 }
 
-function normalizeState(value: unknown): ExtensionState {
+function finiteTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function normalizeSession(value: unknown): FocusSession | null {
+  if (!value || typeof value !== 'object') return null
+  const session = value as Partial<FocusSession>
+  if (
+    typeof session.id !== 'string'
+    || typeof session.sessionName !== 'string'
+    || !Number.isInteger(session.durationMinutes)
+    || !Array.isArray(session.blockedDomains)
+    || !finiteTimestamp(session.startedAt)
+    || !finiteTimestamp(session.endsAt)
+    || session.endsAt <= session.startedAt
+  ) return null
+  return session as FocusSession
+}
+
+function normalizeBreak(value: unknown, session: FocusSession | null): FocusBreak | null {
+  if (!session || !value || typeof value !== 'object') return null
+  const focusBreak = value as Partial<FocusBreak>
+  if (
+    !finiteTimestamp(focusBreak.startedAt)
+    || !finiteTimestamp(focusBreak.endsAt)
+    || focusBreak.endsAt - focusBreak.startedAt !== BREAK_DURATION_MS
+    || focusBreak.startedAt < session.startedAt
+    || focusBreak.endsAt > session.endsAt
+  ) return null
+  return focusBreak as FocusBreak
+}
+
+export function normalizeState(value: unknown): ExtensionState {
   if (!value || typeof value !== 'object') return structuredClone(defaultState)
   const parsed = value as Partial<ExtensionState>
+  const activeSession = normalizeSession(parsed.activeSession)
+  const activeBreak = normalizeBreak(parsed.activeBreak, activeSession)
   return {
     ...structuredClone(defaultState),
     ...parsed,
     settings: { ...defaultSettings, ...(parsed.settings ?? {}) },
+    activeSession,
+    activeBreak,
+    breakReminderDue: activeBreak ? false : parsed.breakReminderDue === true,
+    nextBreakAt: !activeBreak && finiteTimestamp(parsed.nextBreakAt) ? parsed.nextBreakAt : null,
   }
 }
 

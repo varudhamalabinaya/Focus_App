@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ArrowLeft, Check, LockKeyhole } from 'lucide-react'
+import { ArrowLeft, Check, Coffee, LockKeyhole } from 'lucide-react'
 import { recoverState } from './extensionApi'
 import { defaultState, loadExtensionState, subscribeToExtensionState } from './storage'
 import type { ExtensionState } from './types'
@@ -40,6 +40,7 @@ function BlockedPage() {
 
   const session = state.activeSession
   const active = Boolean(session && session.endsAt > now)
+  const activeBreak = active ? state.activeBreak : null
 
   return (
     <main className="blocked-page">
@@ -48,14 +49,14 @@ function BlockedPage() {
         <section className="blocked-panel"><p className="eyebrow">Checking session</p><h1>One moment.</h1></section>
       ) : active && session ? (
         <section className="blocked-panel">
-          <span className="blocked-lock"><LockKeyhole size={30}/></span>
-          <p className="eyebrow">You’re in focus mode</p>
-          <h1>Stay with the work.</h1>
-          <p className="blocked-copy"><strong>{site}</strong> is blocked until your focus session ends.</p>
-          <div className="blocked-timer" aria-label={`${formatClock(session.endsAt - now)} remaining`}>
-            {formatClock(session.endsAt - now)}
+          <span className={`blocked-lock ${activeBreak ? 'break-lock' : ''}`}>{activeBreak ? <Coffee size={30}/> : <LockKeyhole size={30}/>}</span>
+          <p className="eyebrow">{activeBreak ? 'Your designed break is active' : 'You’re in focus mode'}</p>
+          <h1>{activeBreak ? 'Rest without scrolling.' : 'Stay with the work.'}</h1>
+          <p className="blocked-copy"><strong>{site}</strong> stays blocked {activeBreak ? 'throughout the break' : 'until your focus session ends'}.</p>
+          <div className="blocked-timer" aria-label={`${formatClock((activeBreak?.endsAt ?? session.endsAt) - now)} remaining`}>
+            {formatClock((activeBreak?.endsAt ?? session.endsAt) - now)}
           </div>
-          <p className="blocked-remaining">remaining</p>
+          <p className="blocked-remaining">{activeBreak ? 'until focus resumes' : 'remaining'}</p>
           <div className="blocked-ledger"><span>Current session</span><strong>{session.sessionName}</strong></div>
           <button className="return-button" onClick={() => history.back()}><ArrowLeft size={17}/> Return to focused work</button>
         </section>
@@ -68,7 +69,7 @@ function BlockedPage() {
           <button className="return-button" onClick={() => location.reload()}>Continue</button>
         </section>
       )}
-      <footer>Focus protects its own rules during a session. Chrome still allows the extension to be disabled or removed.</footer>
+      <footer>Chrome can disable or remove Focus. While disabled, sites cannot be blocked, but session time continues to elapse.</footer>
     </main>
   )
 }

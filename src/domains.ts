@@ -18,3 +18,14 @@ export function normalizeDomain(value: string): string | null {
 export function displayDomain(domain: string) {
   return domain.replace(/^www\./, '')
 }
+
+export function matchBlockedDomain(urlValue: string, blockedDomains: string[]): string | null {
+  try {
+    const url = new URL(urlValue)
+    if (!['http:', 'https:'].includes(url.protocol)) return null
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, '')
+    return blockedDomains.find((domain) => hostname === domain || hostname.endsWith(`.${domain}`)) ?? null
+  } catch {
+    return null
+  }
+}

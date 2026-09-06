@@ -11,6 +11,11 @@ export interface FocusSession extends FocusSettings {
   endsAt: number
 }
 
+export interface FocusBreak {
+  startedAt: number
+  endsAt: number
+}
+
 export interface CompletedSession {
   id: string
   sessionName: string
@@ -22,6 +27,7 @@ export interface CompletedSession {
 export interface ExtensionState {
   settings: FocusSettings
   activeSession: FocusSession | null
+  activeBreak: FocusBreak | null
   completedSession: CompletedSession | null
   breakReminderDue: boolean
   nextBreakAt: number | null
@@ -29,7 +35,8 @@ export interface ExtensionState {
 
 export type BackgroundMessage =
   | { type: 'START_SESSION'; settings: FocusSettings }
-  | { type: 'ACKNOWLEDGE_BREAK' }
+  | { type: 'START_BREAK' }
+  | { type: 'END_BREAK' }
   | { type: 'RESET_COMPLETION' }
   | { type: 'RECOVER_STATE' }
 

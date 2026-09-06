@@ -206,6 +206,9 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .start-error { display: block; margin: 0 0 7px; color: var(--danger); font-size: 9px; text-align: center; }
 
 .timer-panel { padding: 31px 22px 25px; color: var(--paper); background: var(--ink); text-align: center; }
+.timer-panel.on-break { background: #47351f; }
+.timer-panel.on-break .mode-label { color: #e1c99d; }
+.timer-panel.on-break .mode-label span { background: #d6a854; box-shadow: 0 0 0 4px rgba(214,168,84,.14); }
 .mode-label { display: flex; align-items: center; justify-content: center; gap: 7px; color: #b8c9bc; }
 .mode-label span { width: 6px; height: 6px; background: #88a890; border-radius: 50%; box-shadow: 0 0 0 4px rgba(136,168,144,.12); }
 .timer { margin: 23px -6px 0; font: 400 56px/.95 Georgia, "Times New Roman", serif; letter-spacing: -2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -215,9 +218,10 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 
 .break-status { margin: 18px 22px 0; padding: 13px; display: grid; grid-template-columns: 22px 1fr; gap: 9px; color: var(--forest); border: 1px solid #b8c4b8; background: var(--forest-soft); }
 .break-status.due { grid-template-columns: 22px 1fr auto; color: var(--amber); border-color: #d6bd8a; background: var(--amber-soft); }
+.break-status.active-break { color: var(--amber); border-color: #d6bd8a; background: #f0e4cd; }
 .break-status strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 10px; }
 .break-status p { margin: 0; color: var(--muted); font-size: 9.5px; line-height: 1.4; }
-.break-status button { align-self: center; padding: 6px 8px; color: var(--ink); background: transparent; border: 1px solid #a98442; border-radius: 4px; font-size: 9px; font-weight: 800; cursor: pointer; }
+.break-status button { max-width: 88px; align-self: center; padding: 6px 8px; color: var(--ink); background: transparent; border: 1px solid #a98442; border-radius: 4px; font-size: 9px; font-weight: 800; line-height: 1.25; cursor: pointer; }
 .active-sites { padding: 19px 22px; }
 .locked-domain-list { display: flex; flex-wrap: wrap; gap: 7px; }
 .locked-domain-list span { padding: 7px 8px; display: flex; align-items: center; gap: 5px; color: #4c554e; border: 1px solid var(--line); background: rgba(255,253,246,.55); font-size: 9px; }
@@ -246,6 +250,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .blocked-brand .brand-mark { color: var(--ink); background: var(--paper); }
 .blocked-panel { width: min(560px, 100%); margin: 60px auto; align-self: center; text-align: center; }
 .blocked-lock { width: 64px; height: 64px; margin: 0 auto 28px; display: grid; place-items: center; color: #b9ccbd; border: 1px solid #657068; border-radius: 50%; }
+.blocked-lock.break-lock { color: #e1c99d; border-color: #8d7247; background: rgba(141,114,71,.12); }
 .blocked-panel .eyebrow { color: #9eb1a2; }
 .blocked-panel h1 { margin: 0; font: 400 clamp(41px, 6vw, 64px)/1 Georgia, "Times New Roman", serif; letter-spacing: -1.5px; }
 .blocked-copy { margin: 19px auto 0; max-width: 520px; color: #b9beb8; font-size: 14px; line-height: 1.65; }

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { acknowledgeBreak, recoverState, resetCompletion, startSession } from './extensionApi'
+import { recoverState, resetCompletion, startBreak, startSession } from './extensionApi'
+import { reconcileLifecycle } from './lifecycle'
 import { defaultState, extensionMode, loadExtensionState, saveExtensionState, subscribeToExtensionState } from './storage'
 import type { ExtensionState, FocusSettings } from './types'
 
@@ -8,7 +9,7 @@ interface FocusActions {
   loading: boolean
   error: string
   start: (settings: FocusSettings) => Promise<void>
-  acknowledge: () => Promise<void>
+  takeBreak: () => Promise<void>
   beginAgain: () => Promise<void>
 }
 
@@ -21,11 +22,13 @@ export function FocusProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true
-    void loadExtensionState().then((loaded) => {
+    const restore = extensionMode()
+      ? recoverState().catch(() => loadExtensionState())
+      : loadExtensionState()
+    void restore.then((loaded) => {
       if (!mounted) return
       setState(loaded)
       setLoading(false)
-      if (extensionMode()) void recoverState().catch(() => undefined)
     })
     const unsubscribe = subscribeToExtensionState(setState)
     return () => { mounted = false; unsubscribe() }
@@ -34,27 +37,8 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (extensionMode() || !state.activeSession) return
     const timer = window.setInterval(() => {
-      const session = state.activeSession
-      if (!session) return
-      const now = Date.now()
-      if (now >= session.endsAt) {
-        const next: ExtensionState = {
-          ...state,
-          activeSession: null,
-          breakReminderDue: false,
-          nextBreakAt: null,
-          completedSession: {
-            id: session.id,
-            sessionName: session.sessionName,
-            durationMinutes: session.durationMinutes,
-            startedAt: session.startedAt,
-            completedAt: session.endsAt,
-          },
-        }
-        setState(next)
-        void saveExtensionState(next)
-      } else if (state.nextBreakAt && now >= state.nextBreakAt) {
-        const next = { ...state, breakReminderDue: true, nextBreakAt: null }
+      const next = reconcileLifecycle(state, Date.now()).state
+      if (next !== state) {
         setState(next)
         void saveExtensionState(next)
       }
@@ -71,10 +55,10 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       try { setState(await startSession(settings)) }
       catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not start the session.') }
     },
-    acknowledge: async () => {
+    takeBreak: async () => {
       setError('')
-      try { setState(await acknowledgeBreak()) }
-      catch { setError('Could not acknowledge the reminder. Try again.') }
+      try { setState(await startBreak()) }
+      catch { setError('Could not start the break. Try again.') }
     },
     beginAgain: async () => {
       setError('')
